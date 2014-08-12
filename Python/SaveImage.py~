@@ -1,0 +1,24 @@
+import cv2
+import numpy as np
+import Image
+from datetime import datetime
+import os
+
+def saveImage(count,img,pathName):
+	#create path
+	time = datetime.now()
+
+	image = np.asarray(img[:,:])
+	
+	#name = "Video_"+str(time.day)+"_"+str(time.second)+str(time.microsecond/1000)
+	name =pathName+"/video_"+str(count)	
+	cv2.imwrite(name+".jpg",image)
+	
+	
+if __name__ == '__main__':
+	#img = cv2.imread('/home/oriol/images.jpeg',1)
+	#saveImage("blab",img)
+
+	while (1):
+		time = datetime.now()
+		print "Video_"+str(time.day)+"_"+str(time.second)+str(time.microsecond/1000)

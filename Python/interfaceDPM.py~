@@ -1,0 +1,573 @@
+'''
+Python green-ball-tracking agent for AR.Drone Autopylot program.  
+
+    Copyright (C) 2013 Simon D. Levy
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Lesser General Public License as 
+    published by the Free Software Foundation, either version 3 of the 
+    License, or (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+ You should have received a copy of the GNU Lesser General Public License 
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ You should also have received a copy of the Parrot Parrot AR.Drone 
+ Development License and Parrot AR.Drone copyright notice and disclaimer 
+ and If not, see 
+   <https://projects.ardrone.org/attachments/277/ParrotLicense.txt> 
+ and
+   <https://projects.ardrone.org/attachments/278/ParrotCopyrightAndDisclaimer.txt>.
+'''
+
+import cv
+
+#DroneLibraries
+from DistanceError import *
+from DroneCommands import *
+from Mod import *
+import SaveImage
+import os
+
+#import PedestrianDetector
+import time
+import imp
+import numpy as np
+import math
+from datetime import datetime
+
+# PID parameters
+Kpx = 0.25#0.3#0.125
+Kpz = 0.002#0.08#0.02 	
+Kpy = 0.15#5 #0.25
+
+Kdx = 0.0025#0.3#0.125
+Kdz = 0.002#0.08#0.02
+Kdy = 0.35#5 #0.25
+	
+Kix = 0
+Kiz = 0
+Kiy = 0
+################################
+
+
+'''
+####Detector parameters
+model = "person.txt"
+padding = 12
+threshold = 0.05 #higher less detections and less false positives
+nbNegativeScenes = -1
+interval = 8#5 #higher should work better but slower
+overlap = 0.5
+'''
+###Upper body
+model = "Upper_body.txt"
+padding = 12
+threshold = 5 #higher less detections and less false positives
+nbNegativeScenes = -1
+interval = 5#5 #higher should work better but slower
+overlap = 0.5
+
+##################
+WINDOW_NAME = 'Drone CAM' 
+ImagePath = "Video/"
+minAltitude = 600
+maxAltitude = 1200
+
+bbXrefWidth = 80
+bbXrefHeight = 80
+#xerr = 0.52 
+'''MaxdstWidth = 70
+MindstWidth = 60
+
+MinPersonHeigth = 100
+
+
+#zerr = 8.0#7.0	
+zerr = 12.0 #for face
+
+windowHeight = 50
+windowWidthX = 90
+windowWidthZ = 100'''
+
+
+# Routine called by C program.
+def action(img_bytes, img_width, img_height, is_belly, ctrl_state, vbat_flying_percentage, theta, phi, psi, altitude, vx, vy, vz):
+
+	
+	# Set up command defaults
+	zap = 0
+	phi = 0     
+	theta = 0 
+	gaz = 0
+	yaw = 0
+	imagectr = (img_width/2, img_height/2)
+	   
+	# Create full-color image from bytes
+	image = cv.CreateImageHeader((img_width,img_height), cv.IPL_DEPTH_8U, 3)      
+	cv.SetData(image, img_bytes, img_width*3)
+
+    # Set up state variables first time around
+	if not hasattr(action, 'count'):
+		PedestrianDetector = imp.load_source('PedestrianDetector','../PedestrianDetector/build/PedestrianDetector.py')
+		action.count = 0
+		action.phi_1 = 0
+		action.theta_1 = 0
+		action.gaz_1 = 0
+		#action.Tracker = _InitTracker(np.array(image[:,:]))
+		action.flying = False
+		#action.previousFrame = img_bytes
+		action.boundingboxes = list()
+		action.currentbb = None
+		action.reached = False
+		#action.bbRefWidth = 0
+		action.InitPsi = -999
+		action.yaw_1 = 0
+		action.psi_1 = 0
+		action.track = 5
+		dt = datetime.now()
+		action.log = open("Log_"+str(dt.day)+str(dt.hour)+str(dt.minute)+str(dt.second)+".txt","w")			
+		action.pathName = "Sequence_"+str(dt.day)+str(dt.hour)+str(dt.minute)+str(dt.second)
+		if (not os.path.exists(action.pathName)):
+			os.makedirs(action.pathName)
+		action.MoveVertical = False
+		action.countFrames = False
+		action.Detector = PedestrianDetector.PedestrianDetector()
+		cv.DestroyAllWindows()
+
+	#Don't send any commands while taking off and landing
+	if (action.track == 1 or action.track == 2):
+		action.track = 5
+
+    # calculate tracking 
+	#result = action.Tracker.Run(img_width,img_height,str(img_bytes),img_width,img_height,str(action.previousFrame))
+	#action.previousFrame = img_bytes
+	result = action.Detector.Run(img_width,img_height,3,str(img_bytes),model,padding,threshold,nbNegativeScenes,interval,overlap) 
+	detectorwidth = 0    
+
+	'''if (action.count == 0):
+
+        #Calculate center of image and reference Window according to the first bounding box drawing
+		coords = result.split(";")
+		imagectr = (img_width/2, img_height/2)  
+		action.bbRefWidth = int(coords[2])
+		action.bbRefHeight = int(coords[3]) 
+		action.bbRefTopLeft = (imagectr[0]-action.bbRefWidth/2,imagectr[1]-action.bbRefHeight/2)
+		action.bbRefBottomRight = (imagectr[0] + action.bbRefWidth/2,imagectr[1] + action.bbRefHeight/2)'''
+
+ 	#If psi value is within a correct value and it has not been initialize, initialize it
+	if ( (2>mod(psi) ) and (mod(round(psi,1)) > 0.0) and (action.InitPsi == -999) and (altitude > 400)):
+		action.InitPsi = round(psi,2)
+		print action.InitPsi      
+        
+
+        #Before doing any tracking the drone has to reach a minimum altitude	   
+	if ( (altitude < minAltitude or altitude > maxAltitude) and action.track != 5):	
+		if (altitude < minAltitude):				
+			gaz = 1.0
+			action.gaz_1 = gaz
+			action.MoveVertical = True
+			action.countFrames = 0	
+		elif (altitude > maxAltitude):
+			gaz =-0.5
+			action.gaz_1 = gaz
+			action.MoveVertical = True
+			action.countFrames = 0	
+
+	if (result != "-1"):
+        
+        # Append the new bounding box to the previous detected bounding boxes
+		action.boundingboxes.append(result)
+		pxsum = 0
+		pysum = 0
+		widthsum = 0
+		heightsum = 0
+
+        # calculate the average of the previous 5 bounding boxes
+		for bb in action.boundingboxes:
+			coords = bb.split(";")
+			pxsum = pxsum + int(coords[0])
+			pysum = pysum + int(coords[1])
+			widthsum =  widthsum + int(coords[2])
+			heightsum = heightsum + int(coords[3])
+
+        # Calculate detection bounding box, coordinates center and update current bounding box
+		px = pxsum / len(action.boundingboxes)
+		py = pysum / len(action.boundingboxes)
+		width = widthsum / len(action.boundingboxes)
+		height = heightsum / len(action.boundingboxes)
+		ctr = (px + width/2 , py + height/2)
+		action.currentbb = (px,py,width,height)
+ 		
+		#if the lentgh is 5 the first element is removed so in the next iteration we will have the last 5 elements                   
+		if (len(action.boundingboxes) == 5):
+			action.boundingboxes.pop(0)
+               			
+		#print isOnBorder(action.boundingboxes,img_width,img_height)
+		#To avoid accidents check bounding box width and if bounding box is touching any border for more than 5 frames                   
+		if (width > 10 ):#and not isOnBorder(action.boundingboxes,img_width,img_height)): 
+ 
+
+	       
+			#if (gaz == 0):				
+				#action.reached = True
+				'''if (not isInsideHeight (py, py+height,img_height)):
+					erry = 0.5-fyError(py,action.bbRefHeight,img_height)
+					if (erry> 0):
+						gaz = 0.5
+					else:
+						gaz = -0.5					
+					#gaz = relativeYspeed(erry)
+					action.gaz_1 = gaz
+					action.MoveVertical = True
+					action.countFrames = 0
+				else:'''
+				'''if (action.countFrames < 1 and action.MoveVertical):
+					gaz = action.gaz_1
+					action.countFrames+=1
+					print action.countFrames
+				else:'''
+				action.countFrames = 0
+				action.MoveVertical = False
+				action.reached = True
+				
+				#Get commands speed						
+				(phi,action.phi_1) = GetPhiValue(ctr,imagectr,px,width,img_width,action.phi_1);
+				(theta,action.theta_1) = GetThetaValue(100,180,width,height,action.theta_1);
+						
+				#Send one command per frame
+				'''if (mod(theta) > mod(phi)):
+					phi = 0
+					action.phi_1 = 0
+				else:
+					theta = 0 
+					action.theta_1 = 0'''
+		#action.count +=1	
+		#Draw Reference window, detection, center of detection
+		cv.Rectangle(image,(imagectr[0]-bbXrefWidth/2,imagectr[1]-bbXrefHeight/2),(imagectr[0]+bbXrefWidth/2,imagectr[1]+bbXrefHeight/2),(255,0,0),3)      
+		cv.Rectangle(image,(action.currentbb[0],action.currentbb[1]),(action.currentbb[0]+action.currentbb[2],action.currentbb[1]+action.currentbb[3]),(0,0,255),3)			   
+		cv.Circle(image, ctr, 10,(0,0,0),-1)
+	
+
+	
+    #Read keyboard inputs to take off, land or toogle options 
+	OnKeyPressedAction(img_width,img_height,img_bytes)
+
+
+	if (action.track==0):
+		_writeparametersOnScreen(image,zap,phi,theta,gaz,yaw,vbat_flying_percentage,altitude)
+	else:
+		_writeparametersOnScreen(image,zap,0,0,0,0,vbat_flying_percentage,altitude)
+	
+    # ShowImage   
+	drawline(image,img_width,img_height)
+	cv.NamedWindow(WINDOW_NAME)
+	cv.ShowImage(WINDOW_NAME, image)
+	
+	
+    #SaveImage
+	#if (action.count % 5 == 0):
+	SaveImage.saveImage(action.count,image,action.pathName)
+	action.count+=1
+
+    # Log commands and send control parameters back to drone
+	log(action.log,action.track, phi, theta, gaz, yaw, altitude)
+	return (action.track, phi, theta, gaz, yaw)
+
+
+
+
+#Initializes TLD tracker
+def _InitTracker(img):
+
+	MainOTLD = imp.load_source('MainOTLD','TLD/opentld/build/MainOTLD.py')
+	Tracker = MainOTLD.MainOTLD();
+	Tracker.Init(img.shape[1],img.shape[0],img.tostring())
+	
+	return Tracker
+
+
+
+def OnKeyPressedAction(img_width,img_height,img_bytes):
+
+	k = cv.WaitKey(5)
+
+	#Keyboard actions
+	if (k == 32 or k == 1048608): #space
+		if (not action.flying):
+			zap = 1 #TakeOff
+			action.track = zap
+			action.flying = not action.flying
+			print "Taking off"
+		else:
+			zap = 2 #Land
+			action.track = zap
+			action.flying = not action.flying
+			action.reached = False
+			print "Landing" +  str(action.flying)
+	elif (k == 114 or k == 1048690): #r
+		zap = 3
+		action.track = zap
+		print "recover"
+	elif (k==108 or k== 1048684): #l
+		action.Tracker.ToogleOptions(0,img_width,img_height,str(img_bytes))
+		print ("python: learning")
+	elif (k==97): #a
+		action.Tracker.ToogleOptions(1,img_width,img_height,str(img_bytes))
+		print "python: alternating"
+	elif (k==112 or k==1048688): #Pause P		
+		if (action.track == 0):
+			action.track = 5
+			print "Stop tracking"
+		else:
+			action.track = 0
+			print "Start tracking"
+		#zap = 0
+	elif (k==1113939): #turning right 
+		yaw = 0.1
+		print "Rotating right"
+	elif (k==1113937): #turning left
+		yaw = -0.1
+		print "Rotating left"    
+
+
+#Reference lines
+def drawline(img,img_width,img_height):
+	
+	startLine1 = (0,40)
+	endLine1 = (img_width,40)
+	
+	startLine2 = (0,img_height-40)
+	endLine2 = (img_width,img_height-40)
+	cv.Line(img,startLine1,endLine1,(255,0,0),2,8)
+	cv.Line(img,startLine2,endLine2,(255,0,0),2,8)
+	
+
+
+
+
+#Display control and navdata parameters
+def _writeparametersOnScreen(img,zap,phi,theta,gaz,yaw,battery,altitude):
+	
+	Point1 = (5,10)
+	Point2 = (5,25)
+	Point3 = (5,40)
+	Point4 = (5,55)
+	Point5 = (img.width-90,10)
+	Point6 = (img.width-90, 25)
+	Point7 = (5,75)
+	Point8 = (5,90)
+	Point9 = (5,105)
+	Point10 = (5,120)
+
+	fontTypeBig = cv.InitFont(cv.CV_FONT_HERSHEY_SIMPLEX,1, 1, 1, 3, 2)
+	fontType = cv.InitFont(cv.CV_FONT_HERSHEY_SIMPLEX,0.4, 0.4, 0, 1, 2)
+	color = cv.RGB(255, 0, 0)
+
+	zapLine = "Zap: " + str(zap)
+	phiLine = "Phi: " + str(phi)
+	thetaLine = "Theta: " + str(theta)
+	gazLine = "Gaz: " + str(gaz)
+	yawLine = "Yaw: " + str(yaw)
+	#psiLine = "Psi: " + str(psi)
+	batteryLine = "Battery: " + str(battery) + "%"
+	altitudeLine = "Altitude: " + str(altitude/float(1000)) + "m"
+	direction1 = ""
+	direction2 = ""
+	if phi > 0:
+		direction1 = "--->"
+	elif phi < 0:
+		direction1 = "<---"
+	if theta > 0:
+		direction2 = "Backward"
+	elif theta < 0:
+		direction2 = "Forward"
+
+	cv.PutText(img, direction1, Point2, fontTypeBig, color)
+	cv.PutText(img, direction2, Point4, fontTypeBig, color)
+	cv.PutText(img, phiLine, Point7, fontType, color)
+	cv.PutText(img, thetaLine, Point8, fontType, color)
+	cv.PutText(img, gazLine, Point9, fontType, color)
+	cv.PutText(img, yawLine, Point10, fontType, color)
+	cv.PutText(img, batteryLine, Point5, fontType, color)
+	cv.PutText(img, altitudeLine, Point6, fontType, color)
+
+
+def log(logfile,action, phi, theta, gaz, yaw, altitude):
+
+	line = str(phi)+";"+str(theta)+";"+str(gaz)+";"+str(yaw)+";"+str(altitude)+ "\n"
+	logfile.write(line) # Write a string to a file
+
+	
+
+
+#####################TRASH##########################
+
+	#Check if drone is rotated and correct (Not working so good	) independent of the detection so rotate even if the object is not detected
+	'''if (2>mod(psi) and mod(psi) > 0.0001 and action.InitPsi != -999):
+		#print str(mod(round(psi,2))) + " / " + str(mod(action.InitPsi))
+		if (mod(mod(psi) - mod(action.InitPsi))>0.2):
+			#print "Stabilizating drone..."
+			yaw = yawSpeed(action.InitPsi,round(psi,2),round(action.psi_1,2))
+			action.yaw_1 = yaw		
+			print isCorrectYaw(action.InitPsi,round(psi,1),round(action.psi_1,1))
+			#print "init: " + str(action.InitPsi) + " / current: " + str(round(psi,1))
+			if ( (action.psi_1 != 0) and (not isCorrectYaw(action.InitPsi,round(psi,2),round(action.psi_1,2))) ):
+				#yaw = yawSpeed(action.InitPsi,round(psi,1),round(action.psi_1,1))	
+				yaw = -yaw
+			if (action.InitPsi == round(action.psi_1,2)):
+				yaw = 0
+			if (yaw > 0):
+				print "Rotating right: " +str(yaw)
+			elif (yaw<0):
+				print "Rotating left: " + str(yaw)
+			elif (yaw == 0):
+				print "Stable"
+			#psi = 0
+			action.psi_1 = psi
+			phi = 0
+			action.phi_1 = 0
+			theta = 0
+			action.theta_1 = 0
+			gaz = 0
+			action.gaz_1 = 0'''
+
+'''#Calculates yaw rotation needed
+def yawSpeed(initialPsi,currentPsi,prevPsi):
+	
+	yaw = 0
+	speed = 0.1
+	print str(currentPsi) + "/" +  str(prevPsi)
+	if (initialPsi >= 0 and currentPsi < 0):
+		if (prevPsi > 0.9):
+			yaw = -speed
+			#print "Rotating left"
+		else:
+			yaw = speed
+			#print "Rotating right"
+		
+	elif (initialPsi >=0 and currentPsi > 0):
+		if (initialPsi - currentPsi > 0):
+			yaw = speed
+			#print "Rotating right"
+		elif (initialPsi - currentPsi < 0):
+			yaw = -speed
+			#print "Rotating left"
+
+	elif (initialPsi < 0 and currentPsi > 0):
+		if (prevPsi > 0.9):
+			yaw = speed
+			#print "Rotating right"
+		else:
+			yaw = -speed
+			#print "Rotating left"
+
+	elif (initialPsi < 0 and currentPsi < 0):
+		if ( (mod(initialPsi) - mod(currentPsi) ) < 0):
+			yaw = +speed
+			#print "Rotating right"
+		elif ((mod(initialPsi) - mod(currentPsi) ) > 0):
+			yaw = -speed
+			#print "Rotating left"
+
+	#print "Init Psi: " + str(initialPsi) + " / currentPsi: " + str(currentPsi) + " / Yaw: " + str(yaw)
+
+	return yaw	
+	
+
+def isCorrectYaw(initPsi,currentPsi,prevPsi):
+	
+	#print "prev: " + str(prevPsi) + "current: " + str(currentPsi)
+	if (mod(prevPsi) - mod(initPsi) >= mod(currentPsi)-mod(initPsi)):
+		return True
+	else:
+		return False'''
+
+
+######################################################################################    
+#########Degradation function
+'''phi = degradFunc(errx,action.errx_1,action.currentSpeed)
+print "Phi: "+ str(phi) + "/" + "Current :"  + str(action.currentSpeed)
+action.currentSpeed = phi
+if (mod(action.currentSpeed) < 0.008):                                       
+	action.currentSpeed = 0.1'''
+########Constant#########
+'''if action.count > 0:
+if (errx < 0): 
+	phi = -0.06
+elif (errx > 0):
+	phi = 0.06'''
+########PID##############
+'''phi = _pid(action.phi_1, errx, action.errx_1, Kpx, Kix, Kdx) 
+action.errx_1 = errx
+action.phi_1 = phi'''
+
+
+'''def degradFunc(prevError,currentError,currentSpeed):
+	
+	if (prevError < 0  and currentError < 0):
+                if (currentSpeed < 0):
+        		return currentSpeed
+                else:
+                	return -currentSpeed
+        elif (prevError > 0 and currentError > 0):
+                if (currentSpeed < 0):
+        		return -currentSpeed
+                else:
+                	return currentSpeed                
+        	
+    	elif (prevError < 0 and currentError > 0):
+                if (currentSpeed < 0):
+        		return -currentSpeed/2.0
+                else:
+                	return currentSpeed/2.0
+        	
+        elif (prevError > 0 and currentError < 0):
+                if (currentSpeed < 0):
+        		return currentSpeed/2.0
+                else:
+                	return -currentSpeed/2.0
+        else:
+		return 0'''
+
+    
+'''# Simple PID controller from http://www.control.com/thread/1026159301
+def _pid(out_1, err, err_1, Kp, Ki, Kd):
+    return Kp*err + Ki*(err+err_1) + Kd*(err-err_1) 
+	#return out_1 + Kp*err + Ki*(err+err_1) + Kd*(err-err_1) 
+
+
+
+
+#Calculates if the drone is on the border for too long
+def isOnBorder(bboxes,img_width,img_height):
+	for bb in bboxes:
+		coords = bb.split(";")
+		tlX = int(coords[0])
+		tlY = int(coords[1])
+		brX = int(coords[0]) + int(coords[2])
+		brY = int(coords[1]) + int (coords[3])
+		if (tlX != 0 and tlY != 0 and brX != img_width and brY != img_height):
+			return False
+	return True
+
+
+#Returns if the point is inside the defined window
+def isInsideHeight(point,windowRefTL,windowRefHeight):			
+	return (point[1]-windowRefTL[1] > 0) and ((windowRefTL[1]+windowRefHeight)-point[1] > 0)	
+
+
+#Keeps drone in a constant height
+def _autoHeight(altitude):
+			
+	if (altitude > 	flightAltitude+600):
+		return -0.5#(1400.0-altitude)/1000.0
+	if (altitude < flightAltitude):
+		return 0.5#(1350.0 - altitude)/1000.0
+	else:
+		return 0'''
+
+
