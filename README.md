@@ -1,10 +1,11 @@
-
 Drone person and object tracking implementation, based on TLD and DPM algorithms. This is a Python and C++ project for the Parrot ARDrone.	
 
 			INSTALLING PREREQUISITES
 
 -Ubuntu 12.4
+
 -Opencv-2.4.6
+
 -Python 2.7
 
 
@@ -25,7 +26,8 @@ Our implementation is based on that code but includes modifications in order to 
 	4- cmake ..
 	5- make
 	
-	If everything is fine we have compiled and built the DPM detector, and a Python wrapper class has been created. We can import this class then into any Python code and use the detector.
+	If everything is fine the DPM detector code has been compiled and installed and a Python wrapper class has been created. 
+	We can now import this class into any Python code and use the detector as a standard Python class.
 
 -Install the TLD tracker and create the needed wrappers
 
@@ -36,7 +38,8 @@ Our implementation is based on that code but includes modifications in order to 
 	5- cmake ..
 	6- make
 
-	If everything is fine we have compiled and built the TLD Tracker and a Python wrapper class has been created. We can import this class then into any Python code and use the tracker.
+	If everything is fine the TLD Tracker had been compiled and installed and a Python wrapper class has been created. 
+	We can now import this class into any Python code and use the tracker as a standard Python class.
 
 
 			RUNNING THE APPLICATION
